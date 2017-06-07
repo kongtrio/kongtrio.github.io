@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<search>
+  <entry>
+    <title><![CDATA[springMVC,文件上传超过大小限制时的异常处理]]></title>
+    <url>%2F2017%2F06%2F07%2FspringMVC-%E6%96%87%E4%BB%B6%E4%B8%8A%E4%BC%A0%E8%B6%85%E8%BF%87%E5%A4%A7%E5%B0%8F%E9%99%90%E5%88%B6%E6%97%B6%E7%9A%84%E5%BC%82%E5%B8%B8%E5%A4%84%E7%90%86%2F</url>
+    <content type="text"><![CDATA[springMVC 文件上传超过大小限制时的异常处理&amp;所有异常处理​ 今天要做一个文件上传的功能。想限制上传文件的大小，但是同时又想当用户上传文件的时候给出友好的页面提示所上传的文件过大。springMVC出现异常的时候默认的是出现一个网站异常的界面。那如何手动处理springMVC抛出的异常，并根据对应异常跳转到我们指定的页面呢？ ​ 谷歌了一下。可配置的大体有以下3种解决办法。 一、在spring-mvc.xml 中配置​ 在spring-mvc.xml中加上如下配置。 123456789&lt;bean class="org.springframework.web.servlet.handler.SimpleMappingExceptionResolver"&gt; &lt;property name="exceptionMappings"&gt; &lt;props&gt; &lt;prop key="java.lang.Exception"&gt;redirect:/login/error&lt;/prop&gt; &lt;prop key="org.springframework.web.multipart.MaxUploadSizeExceededException"&gt;/error&lt;/prop&gt; &lt;/props&gt; &lt;/property&gt; &lt;property name="defaultStatusCode" value="500"/&gt; &lt;/bean&gt; ​ 这个配置可以指定哪种异常用哪种策略。比如上面我们配置了抛出MaxUploadSizeExceededException的时候跳转到/error这个视图。 二、实现HandlerExceptionResolver接口​ 对应的controller类实现HandlerExceptionResolver的resolveException方法，可以在代码中根据不同的异常来执行对应的策略。resolveException代码如下(返回json格式数据): 1234567891011121314public ModelAndView resolveException(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) &#123; ModelAndView view = new ModelAndView(); view.setView(new MappingJacksonJsonView()); if (ex instanceof MaxUploadSizeExceededException) &#123; System.out.println("size excetion"); view.addObject("error data"); return view; &#125; else &#123; System.out.println("normal exception"); &#125; return null; &#125; 三、用注解@ControllerAdvice 实现全局异常捕获并处理​ 上面那种方法只能处理单个controller里面的异常。如果想要处理整个应用的异常，可以专门写一个GlobalExceptionHandler类来处理所以的异常。 ​ 代码如下。 123456789101112131415@ControllerAdvicepublic class GlobalExceptionHandler &#123; @ExceptionHandler(MaxUploadSizeExceededException.class) public String handleMaxUploadException(MaxUploadSizeExceededException e, HttpServletRequest request, HttpServletResponse response) &#123; ModelAndView mav = new ModelAndView(); boolean isJson = request.getRequestURL().toString().contains(".json"); if (isJson) &#123; mav.setView(new MappingJacksonJsonView()); mav.addObject("result", "nok"); &#125; else &#123; mav.setViewName("error"); &#125; return "error"; &#125;&#125; 如果试了以上3中办法可以了，就不用往下看了。 在谷歌上找来找去，基本都是以上几种办法。看其他人好像都没有什么问题，但是我把上面3种方法来回折腾了好几遍都死活不行(奇怪的是chrome、ie不可以，火狐浏览器却可以….其他浏览器没试)，也不懂问题出在哪里，只能以后有空把springMVC的源码翻一遍看看了。最后还是用拦截器解决了这个问题。 四、拦截器拦截附件大小超过限制的请求​ 只能自己写拦截器做附件大小限制。先不设置spring-mvc.xml中CommonsMultipartResolver的fileMaxSize的大小。 12345&lt;bean id="multipartResolver" class="org.springframework.web.multipart.commons.CommonsMultipartResolver"&gt; &lt;!--表示延迟解析这个文件，先判断文件大小后再解析文件 --&gt; &lt;property name="resolveLazily" value="true"/&gt;&lt;/bean&gt; 设置自己的拦截器 12345678910&lt;mvc:interceptors&gt; &lt;mvc:interceptor&gt; &lt;mvc:mapping path="/"/&gt; &lt;mvc:mapping path="/*"/&gt; &lt;mvc:mapping path="/**"/&gt; &lt;bean class="com.imp.interceptor.FileSizeInterceptor"&gt; &lt;property name="maxFileSize" value="1048576"/&gt; &lt;/bean&gt; &lt;/mvc:interceptor&gt;&lt;/mvc:interceptors&gt; 拦截器代码 123456789101112131415161718192021222324252627282930313233343536373839/** * Created by yangjb on 2017/3/20. * 拦截附件大小超过maxFileSize的请求 */public class FileSizeInterceptor extends HandlerInterceptorAdapter &#123; private static final Logger LOGGER = LoggerFactory.getLogger(FileSizeInterceptor.class); //B为单位 private long maxFileSize; @Override public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception &#123; boolean isFileForm = ServletFileUpload.isMultipartContent(request); if (isFileForm) &#123; MultipartHttpServletRequest multipartRequest = (MultipartHttpServletRequest) request; MultipartFile file = multipartRequest.getFile("file"); CommonsMultipartFile cf = (CommonsMultipartFile) file; if (cf.getSize() &gt; maxFileSize) &#123; LOGGER.info("file &#123;&#125; size &#123;&#125;B is bigger than &#123;&#125;B", cf.getSize(), cf.getOriginalFilename(), maxFileSize); response.sendRedirect(request.getContextPath() + "/process/list"); return false; &#125; &#125; return super.preHandle(request, response, handler); &#125; @Override public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, ModelAndView modelAndView) throws Exception &#123; super.postHandle(request, response, handler, modelAndView); &#125; public long getMaxFileSize() &#123; return maxFileSize; &#125; public void setMaxFileSize(long maxFileSize) &#123; this.maxFileSize = maxFileSize; &#125;&#125; 写完终于搞定这个问题。 总结: 上面的拦截器是针对所有url进行拦截，并且只获取name=file的文件进行大小判断。可以进行相应改进 网上有些人在前端做限制，个人认为不够安全。最好能前后台都做限制。前端做限制的代码请自行谷歌。 @yangjb 2017.03.20]]></content>
+      <categories>
+        <category>Java</category>
+      </categories>
+      <tags>
+        <tag>Spring</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title><![CDATA[first]]></title>
+    <url>%2F2017%2F06%2F06%2Ffirst%2F</url>
+    <content type="text"><![CDATA[胖胖 你是我的大胖胖 胖李胖胖胖]]></content>
+      <categories>
+        <category>Java</category>
+      </categories>
+      <tags>
+        <tag>test</tag>
+        <tag>yangjb</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title><![CDATA[Hello World]]></title>
+    <url>%2F2017%2F06%2F06%2Fhello-world%2F</url>
+    <content type="text"><![CDATA[Welcome to Hexo! This is your very first post. Check documentation for more info. If you get any problems when using Hexo, you can find the answer in troubleshooting or you can ask me on GitHub. Quick StartCreate a new post1$ hexo new "My New Post" More info: Writing Run server1$ hexo server More info: Server Generate static files1$ hexo generate More info: Generating Deploy to remote sites1$ hexo deploy More info: Deployment]]></content>
+  </entry>
+</search>
